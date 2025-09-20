@@ -1,5 +1,6 @@
 .*
 vendor
-*.lock
-resources/images/**
 *.env
+resources/images/**
+*.lock
+!composer.lock

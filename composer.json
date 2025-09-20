@@ -1,6 +1,8 @@
 {
   "name": "carlgo11/guest-portal",
+  "description": "UniFi guest portal with LDAP integration and hardened input validation.",
   "homepage": "https://github.com/carlgo11/guest-portal.git",
+  "license": "CC-BY-4.0",
   "autoload": {
     "psr-4": {
       "Carlgo11\\Guest_Portal\\": "src/"
@@ -9,6 +11,6 @@
   "require": {
     "php": ">= 8.0",
     "art-of-wifi/unifi-api-client": "^1.1",
-    "twig/twig": ">= 3.0"
+    "twig/twig": "^3.0"
   }
 }

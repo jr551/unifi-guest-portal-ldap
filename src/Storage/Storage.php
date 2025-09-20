@@ -3,6 +3,7 @@
 namespace Carlgo11\Guest_Portal\Storage;
 
 use Carlgo11\Guest_Portal\Voucher;
+use Exception;
 
 class Storage
 {
@@ -10,54 +11,42 @@ class Storage
 
     public function __construct()
     {
-        switch (strtolower($_ENV['DATABASE'])) {
+        $driver = strtolower((string)($_ENV['DATABASE'] ?? 'mysql'));
+
+        switch ($driver) {
+            case 'mariadb':
             case 'mysql':
-                include_once __DIR__ . '/MariaDB.php';
                 $this->database = new MariaDB();
                 break;
             case 'redis':
-                include_once __DIR__ . '/Redis.php';
                 $this->database = new Redis();
                 break;
             default:
-                throw new \Exception("No database specified");
+                throw new Exception('No supported database specified');
         }
     }
 
-    public function fetchVoucher(int $code): Voucher
+    public function fetchVoucher(string $code): Voucher
     {
         return $this->database->fetchVoucher($code);
     }
 
-    /**
-     * @param Voucher $voucher Voucher to upload to storage.
-     * @return bool Returns TRUE if successful, otherwise FALSE.
-     */
     public function uploadVoucher(Voucher $voucher): bool
     {
         return $this->database->uploadVoucher($voucher);
     }
 
-    /**
-     * @param Voucher $voucher Voucher to delete from storage.
-     * @return bool Returns TRUE if successful, otherwise FALSE.
-     */
     public function removeVoucher(Voucher $voucher): bool
     {
         return $this->database->removeVoucher($voucher);
     }
 
-    /**
-     * @param Voucher $voucher Voucher to update.
-     * @param int $newUses New amount of uses left on the voucher.
-     * @return bool Returns TRUE if successful, otherwise FALSE.
-     */
     public function updateUses(Voucher $voucher, int $newUses): bool
     {
         return $this->database->updateUses($voucher, $newUses);
     }
 
-    public function getPassword(string $username): string
+    public function getPassword(string $username): ?string
     {
         return $this->database->getPassword($username);
     }
@@ -72,3 +61,4 @@ class Storage
         return $this->database->userAmount();
     }
 }
+

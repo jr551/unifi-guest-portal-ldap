@@ -32,7 +32,7 @@ class Redis implements iStorage
      * @param int $code voucher code.
      * @return Voucher Voucher data as {@link Voucher} class
      */
-    public function fetchVoucher(int $code): Voucher
+    public function fetchVoucher(string $code): Voucher
     {
         // TODO: Implement fetchVoucher() method.
     }
