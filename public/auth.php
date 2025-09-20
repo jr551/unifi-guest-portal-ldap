@@ -1,63 +1,145 @@
 <?php
+declare(strict_types=1);
 
 use Carlgo11\Guest_Portal\Storage\Storage;
-use JetBrains\PhpStorm\NoReturn;
 use Twig\Environment;
 use Twig\Loader\FilesystemLoader;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-#[NoReturn] function send($message, $code = 200)
+function sendResponse(mixed $message, int $code = 200): void
 {
     http_response_code($code);
-    die(json_encode($message));
+
+    if ($code === 204 || $message === null) {
+        exit;
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+
+    try {
+        echo json_encode($message, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+    } catch (JsonException $exception) {
+        error_log('JSON encoding failed: ' . $exception->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'Internal server error']);
+    }
+
+    exit;
 }
 
+/**
+ * @throws JsonException
+ */
+function readJsonInput(): array
+{
+    $raw = file_get_contents('php://input');
+    if ($raw === false) {
+        throw new RuntimeException('Unable to read request body.', 500);
+    }
+
+    if ($raw === '') {
+        throw new Exception('Empty request body', 400);
+    }
+
+    return json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+}
+
+/**
+ * @throws JsonException
+ */
 function language(): array
 {
     $lang = $_ENV['LANG'] ?? 'en';
-    if (is_null($file = file_get_contents(__DIR__ . "/../language_${lang}.json"))) throw new Exception('Language pack not found.');
-    return json_decode($file, true);
+    $lang = preg_replace('/[^a-z0-9_-]/i', '', $lang) ?: 'en';
+    $path = sprintf('%s/../language_%s.json', __DIR__, $lang);
+    if (!is_file($path)) {
+        throw new RuntimeException('Language pack not found.', 500);
+    }
+
+    $content = file_get_contents($path);
+    if ($content === false) {
+        throw new RuntimeException('Unable to read language pack.', 500);
+    }
+
+    return json_decode($content, true, 512, JSON_THROW_ON_ERROR);
 }
 
-#[NoReturn] function start_session(string $username)
+function startSecureSession(): void
 {
-    session_start();
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        return;
+    }
+
+    $secureCookie = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+
+    session_start([
+        'cookie_httponly' => true,
+        'cookie_samesite' => 'Strict',
+        'cookie_secure' => $secureCookie,
+        'use_strict_mode' => true,
+    ]);
+}
+
+function startAuthenticatedSession(string $username): void
+{
+    startSecureSession();
+    session_regenerate_id(true);
     $_SESSION['user'] = $username;
-    session_commit();
-    send(null, 204);
+    session_write_close();
+    sendResponse(null, 204);
 }
 
 $db = new Storage();
-$first_login = !$db->userAmount();
+$firstLogin = $db->userAmount() === 0;
 
-switch ($_SERVER['REQUEST_METHOD']) {
+switch ($_SERVER['REQUEST_METHOD'] ?? 'GET') {
     case 'GET':
         $loader = new FilesystemLoader([__DIR__ . '/../templates', __DIR__ . '/../templates/auth']);
         $twig = new Environment($loader);
-        echo $twig->render('auth.twig', ['lang' => language(), 'first_login' => $first_login]);
+        echo $twig->render('auth.twig', ['lang' => language(), 'first_login' => $firstLogin]);
         break;
 
     case 'POST':
-        $data = json_decode(file_get_contents('php://input'), true);
         try {
-            $username = preg_replace('/\W/', '', $data['username']);
-            if ($first_login) {
-                $hash = password_hash(filter_var($data['password'], 513), PASSWORD_BCRYPT);
-                $result = $db->createUser($username, $hash);
-                if ($result) start_session($username);
-
-                throw new Exception('Unable to create user');
-            } else {
-                $password = filter_var($data['password']);
-                if (password_verify($password, $db->getPassword($username))) start_session($username);
-
-                throw new Exception("Invalid username or password", 400);
+            $data = readJsonInput();
+            $username = isset($data['username']) ? preg_replace('/[^A-Za-z0-9_]/', '', (string)$data['username']) : '';
+            if ($username === '' || strlen($username) > 32) {
+                throw new Exception('Invalid username', 400);
             }
-        } catch (Exception $e) {
-            $msg = $e->getMessage();
-            $code = $e->getCode() ?? 500;
-            error_log($msg);
-            send(['error' => $msg], $code);
+
+            $password = isset($data['password']) ? (string)$data['password'] : '';
+            if ($password === '') {
+                throw new Exception('Password is required', 400);
+            }
+
+            if ($firstLogin) {
+                if (strlen($password) < 12) {
+                    throw new Exception('Password must be at least 12 characters long', 400);
+                }
+
+                $hash = password_hash($password, PASSWORD_DEFAULT);
+                if ($hash === false || !$db->createUser($username, $hash)) {
+                    throw new Exception('Unable to create user');
+                }
+
+                startAuthenticatedSession($username);
+            } else {
+                $storedHash = $db->getPassword($username);
+                if ($storedHash === null || !password_verify($password, $storedHash)) {
+                    throw new Exception('Invalid username or password', 400);
+                }
+
+                startAuthenticatedSession($username);
+            }
+        } catch (JsonException $exception) {
+            error_log('Invalid JSON payload: ' . $exception->getMessage());
+            sendResponse(['error' => 'Invalid JSON payload'], 400);
+        } catch (Exception $exception) {
+            $code = $exception->getCode() ?: 500;
+            error_log($exception->getMessage());
+            sendResponse(['error' => $exception->getMessage()], $code);
         }
+        break;
 }
+

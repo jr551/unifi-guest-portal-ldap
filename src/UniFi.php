@@ -2,41 +2,71 @@
 
 namespace Carlgo11\Guest_Portal;
 
-use DateTime;
+use DateTimeImmutable;
+use Exception;
 use UniFi_API\Client as UniFi_API;
 
 class UniFi
 {
-
     private UniFi_API $unifi_connection;
 
+    /**
+     * @throws Exception
+     */
     public function __construct(string $site)
     {
-        require_once __DIR__ . '/../vendor/autoload.php';
-        $this->unifi_connection = new UniFi_API($_ENV['UNIFI_USER'], $_ENV['UNIFI_PASSWORD'], $_ENV['UNIFI_URL'], $site, $_ENV['UNIFI_VERSION'], $_ENV['UNIFI_VERIFY_CERT']);
-        if (!($login = $this->unifi_connection->login())) throw new \Exception("Unable to access Unifi system.", 503);
-        return $login;
+        $username = $_ENV['UNIFI_USER'] ?? '';
+        $password = $_ENV['UNIFI_PASSWORD'] ?? '';
+        $url = $_ENV['UNIFI_URL'] ?? '';
+        $version = $_ENV['UNIFI_VERSION'] ?? 'v6';
+        $verifyCert = filter_var($_ENV['UNIFI_VERIFY_CERT'] ?? true, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+        $verifyCert = $verifyCert ?? true;
+
+        $this->unifi_connection = new UniFi_API($username, $password, $url, $site, $version, $verifyCert);
+
+        if ($this->unifi_connection->login() !== true) {
+            throw new Exception('Unable to access Unifi system.', 503);
+        }
     }
 
     public function __destruct()
     {
-        $this->unifi_connection->logout();
+        if (isset($this->unifi_connection)) {
+            $this->unifi_connection->logout();
+        }
     }
 
-    public function authorizeGuest(string $MACAddress, Voucher $voucher, string $ap = NULL): bool
+    /**
+     * @throws Exception
+     */
+    public function authorizeGuest(string $macAddress, Voucher $voucher, ?string $ap = null): bool
     {
-        $now = new DateTime();
-        $duration = $voucher->duration;
-        if (($diff = $now->diff($duration)) === NULL) throw new \Exception("Unable to process session duration.", 500);
-        $speed_limit = $voucher->speed_limit * 1024;
+        $now = new DateTimeImmutable();
+        $sessionExpiry = DateTimeImmutable::createFromMutable($voucher->duration);
+        $secondsRemaining = max(0, $sessionExpiry->getTimestamp() - $now->getTimestamp());
 
-        return $this->unifi_connection->authorize_guest(mac: $MACAddress, minutes: $diff->i, up: $speed_limit, down: $speed_limit, megabytes: null, ap_mac: $ap);
+        if ($secondsRemaining === 0) {
+            throw new Exception('Voucher session has already expired.', 400);
+        }
+
+        $minutes = (int)max(1, ceil($secondsRemaining / 60));
+        $speedLimit = (int)$voucher->speed_limit * 1024;
+
+        return $this->unifi_connection->authorize_guest(
+            mac: $macAddress,
+            minutes: $minutes,
+            up: $speedLimit,
+            down: $speedLimit,
+            megabytes: null,
+            ap_mac: $ap
+        );
     }
 
-    public function isOnline($mac): bool
+    public function isOnline(string $mac): bool
     {
-        $resp = $this->unifi_connection->list_clients($mac);
-        return ($resp !== FALSE && sizeof($resp) > 0);
-    }
+        $clients = $this->unifi_connection->list_clients($mac);
 
+        return is_array($clients) && !empty($clients);
+    }
 }
+
